@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
+	"os"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -40,6 +42,7 @@ import (
 	"github.com/osrg/gobgp/internal/pkg/config"
 	"github.com/osrg/gobgp/internal/pkg/table"
 	"github.com/osrg/gobgp/pkg/packet/bgp"
+	"google.golang.org/grpc/reflection"
 )
 
 type server struct {
@@ -56,6 +59,7 @@ func newAPIserver(b *BgpServer, g *grpc.Server, hosts string) *server {
 		hosts:      hosts,
 	}
 	api.RegisterGobgpApiServer(g, s)
+	reflection.Register(g)
 	return s
 }
 
@@ -64,8 +68,26 @@ func (s *server) serve() error {
 	l := []net.Listener{}
 	var err error
 	for _, host := range strings.Split(s.hosts, ",") {
+		network := "tcp"
+		address := host
+		var u *url.URL
+		u, err = url.Parse(host)
+		// At the moment, only handle unix domain in URI form
+		// Currently ipaddr:port form is not valid URI, so if error, drop through
+		if err == nil && u.Scheme == "unix" {
+			address = u.Path
+			network = "unix"
+			// Remove
+			if err = os.RemoveAll(u.Path); err != nil {
+				log.WithFields(log.Fields{
+					"Topic": "grpc",
+					"Key":   address,
+					"Error": err,
+				}).Warn("Remove failed")
+			}
+		}
 		var lis net.Listener
-		lis, err = net.Listen("tcp", host)
+		lis, err = net.Listen(network, address)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"Topic": "grpc",
@@ -76,6 +98,7 @@ func (s *server) serve() error {
 		}
 		l = append(l, lis)
 	}
+
 	if err != nil {
 		for _, lis := range l {
 			lis.Close()
