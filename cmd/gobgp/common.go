@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -181,6 +182,12 @@ func extractReserved(args []string, keys map[string]int) (map[string][]string, e
 	return m, nil
 }
 
+func unixConnect(addr string, t time.Duration) (net.Conn, error) {
+	unixAddr, err := net.ResolveUnixAddr("unix", addr)
+	conn, err := net.DialUnix("unix", nil, unixAddr)
+	return conn, err
+}
+
 func newClient(ctx context.Context) (api.GobgpApiClient, context.CancelFunc, error) {
 	grpcOpts := []grpc.DialOption{grpc.WithBlock()}
 	if globalOpts.TLS {
@@ -199,9 +206,15 @@ func newClient(ctx context.Context) (api.GobgpApiClient, context.CancelFunc, err
 		grpcOpts = append(grpcOpts, grpc.WithInsecure())
 	}
 
-	target := net.JoinHostPort(globalOpts.Host, strconv.Itoa(globalOpts.Port))
-	if target == "" {
-		target = ":50051"
+	var target string
+	if u, err := url.Parse(globalOpts.Host); err == nil && u.Scheme == "unix" {
+		target = u.Path
+		grpcOpts = append(grpcOpts, grpc.WithDialer(unixConnect))
+	} else {
+		target := net.JoinHostPort(globalOpts.Host, strconv.Itoa(globalOpts.Port))
+		if target == "" {
+			target = ":50051"
+		}
 	}
 	cc, cancel := context.WithTimeout(ctx, time.Second)
 	conn, err := grpc.DialContext(cc, target, grpcOpts...)
